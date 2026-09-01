@@ -1,99 +1,129 @@
-// Vercel serverless function — POST /api/chat
-// Keeps the Anthropic API key on the server. Never expose it to the browser
-// (never prefix it with VITE_ — that would bundle it into the client JS).
-
-const SYSTEM_PROMPT = `You are Flo, the AI assistant on the ClinicFlow AI website.
+const SYSTEM_PROMPT = `You are Flow, the AI assistant on the ClinicFlow AI website.
 
 About ClinicFlow AI:
-- We build chatbots and callbots for medical practices and clinics — front-desk automation,
-  not clinical advice.
-- Services: (1) medical practice chatbots for web/SMS intake, insurance FAQs and booking,
-  (2) voice callbots that answer the phone, reschedule appointments, and warm-transfer
-  urgent calls to staff, (3) patient records & EMR sync so conversations log automatically.
-- Packages: Basic (small clinics), Standard (most popular, multilingual + EMR integration),
-  Premium (enterprise, dedicated manager, custom telephony, SLA).
-- Team: five people — two AI specialists, one full-stack engineer, two on marketing.
-- Every build gets clinically-reviewed escalation rules before going live.
+- We build AI chatbots and AI call agents for medical practices and clinics.
+- We automate front-desk conversations. We do not provide medical or clinical advice.
+- Our website chatbots answer common questions, capture leads, support web/SMS intake, answer insurance FAQs, and help with appointment requests.
+- Our AI call agents answer calls, handle common questions, capture leads, manage appointment requests, and route urgent calls to staff.
+- We can offer optional patient-record and EMR integrations so conversations can be logged.
+- The Packages page on this website is the source of truth for current packages, features, and pricing.
 
 How to talk:
-- Be warm, concise, and direct — a few sentences per reply, not paragraphs.
-- Small talk matters. If someone says "hi", "hey", "how are you", or anything casual, respond
-  naturally and briefly like a friendly person would ("Doing well, thanks for asking! How can
-  I help you today?") — then, if it fits naturally, offer to tell them about ClinicFlow AI.
-  Never respond to a greeting with an error, a services pitch with no warmth, or silence.
-- If asked about "ClinicFlow AI", "your company", "what do you do", etc., give a clear,
-  enthusiastic answer about what we build and who we build it for (medical practices).
-- If asked about "the team", "who built this", "who works there", etc., describe the
-  five-person team and their roles (two AI specialists, one full-stack engineer, two
-  marketing) — feel free to give it a bit of personality (e.g. "small on purpose — no
-  account managers, the people who build it are the people who answer for it").
-- If asked about booking an appointment or demo, walk them through it clearly: tell them to
-  visit the "Book a Demo" page on this site, pick an open date and time, and fill in their
-  name, email, and practice — it takes about a minute. Be encouraging, not just a link-drop.
-- You do NOT have access to real appointment calendars and cannot actually book, reschedule,
-  or cancel anything yourself. Be upfront and friendly about that limitation rather than
-  pretending — then redirect to the Book a Demo page or ibrahimibnanwar002@gmail.com.
-- Never invent pricing numbers, features, or claims not listed above. If you don't know
-  something specific (exact pricing, integration details), say so honestly and suggest
-  booking a demo to get a real answer.
-- Never give medical advice, even if asked. Redirect clearly to the person's own clinic or
-  a medical professional.
-- Keep responses in plain text, no markdown formatting.`;
+- Be warm, concise, direct, and helpful. Keep replies short.
+- If someone says hi, hey, hello, or asks how you are, respond naturally first.
+- If asked what we do, explain that ClinicFlow AI builds AI chatbots and call agents for clinics and medical practices.
+- If asked about chatbots, explain they answer questions 24/7, capture leads, answer FAQs, and help with appointment requests.
+- If asked about call agents, explain they answer incoming calls, answer common questions, capture missed leads, handle appointment requests, and route urgent calls to staff.
+- If asked about packages, pricing, plans, cost, or which option is best, do not invent prices or package features. Say: "You can visit our Packages page to compare the current options and see which package suits your business." Then offer to help them book a demo.
+- If asked for the package link, tell them to use the Packages link in the website navigation.
+- If asked about security, say ClinicFlow AI designs solutions with privacy and secure handling in mind, and exact safeguards are discussed during a demo. Do not claim HIPAA certification or any specific compliance unless the website explicitly states it.
+- If asked to book a demo, tell them to visit the Book a Demo page, choose an available date and time, and enter their name, email, and practice details.
+- You cannot directly book, reschedule, or cancel appointments. Guide people to the Book a Demo page or contact@clinicflowai.us.
+- Never give medical advice. Tell users to contact a qualified medical professional.
+- Never invent information, pricing, guarantees, or features.
+- Use plain text only. Do not use markdown.`;
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" });
-    return;
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchWithRetry(url, options, attempts = 3) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, options);
+
+      // Retry temporary Gemini/server errors.
+      if (![429, 500, 502, 503, 504].includes(response.status)) {
+        return response;
+      }
+
+      lastError = new Error(`Temporary API error: ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < attempts) {
+      await wait(attempt * 1200);
+    }
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  throw lastError;
+}
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+
   if (!apiKey) {
-    res.status(500).json({
-      error: "The AI assistant isn't configured yet. Set ANTHROPIC_API_KEY in your hosting environment.",
+    return res.status(500).json({
+      error: "GEMINI_API_KEY is missing from .env.local.",
     });
-    return;
   }
 
   const { messages } = req.body || {};
+
   if (!Array.isArray(messages) || messages.length === 0) {
-    res.status(400).json({ error: "Missing messages." });
-    return;
+    return res.status(400).json({ error: "Missing messages." });
   }
 
-  // Only forward role + content — never trust extra fields from the client.
-  const cleanMessages = messages
-    .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-    .slice(-20) // cap history sent per request
-    .map((m) => ({ role: m.role, content: m.content }));
+  const contents = messages
+    .filter(
+      (message) =>
+        message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string"
+    )
+    .slice(-20)
+    .map((message) => ({
+      role: message.role === "assistant" ? "model" : "user",
+      parts: [{ text: message.content }],
+    }));
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-5", // swap for "claude-haiku-4-5-20251001" for a cheaper/faster bot
-        max_tokens: 500,
-        system: SYSTEM_PROMPT,
-        messages: cleanMessages,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("Anthropic API error:", response.status, errText);
-      res.status(502).json({ error: "The AI assistant is temporarily unavailable." });
-      return;
-    }
+    const response = await fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: SYSTEM_PROMPT }],
+          },
+          contents,
+          generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: 350,
+          },
+        }),
+      }
+    );
 
     const data = await response.json();
-    const reply = data?.content?.find((b) => b.type === "text")?.text?.trim();
-    res.status(200).json({ reply: reply || "Sorry, could you rephrase that?" });
-  } catch (err) {
-    console.error("Chat handler error:", err);
-    res.status(500).json({ error: "The AI assistant is temporarily unavailable." });
+
+    if (!response.ok) {
+      console.error("Gemini API error:", data);
+      return res.status(502).json({
+        error: "The AI assistant is temporarily unavailable.",
+      });
+    }
+
+    const reply = data?.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || "")
+      .join("")
+      .trim();
+
+    return res.status(200).json({
+      reply: reply || "Sorry, could you rephrase that?",
+    });
+  } catch (error) {
+    console.error("Gemini chat error:", error);
+
+    return res.status(500).json({
+      error: "The AI assistant is temporarily unavailable.",
+    });
   }
 }

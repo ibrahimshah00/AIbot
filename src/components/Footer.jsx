@@ -53,7 +53,7 @@ export default function Footer() {
     href="mailto:ibrahimibnanwar002@gmail.com"
     className="block text-sm text-white hover:text-teal-300 transition-colors mb-2 link-underline w-fit"
   >
-    ibrahimibnanwar002@gmail.com
+    contact@clinicflowai.us
   </a>
 
   <a
